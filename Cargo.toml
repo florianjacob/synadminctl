@@ -7,11 +7,14 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-minreq = { version = "2", features = ["https"] }
+async-std = { version = "1", features = ["attributes"]}
+http-types = "1"
+http-client = { version = "1", features = ["curl_client"]}
+async-h1 = "1"
+# async-tls = "0.6"
+async-native-tls = "0.3"
+async-trait = "0.1"
+# reqwest = { version = "0.10", features = ["blocking"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-percent-encoding = "2"
-anyhow = "1"
-rpassword = "4"
-hostname = "0.3"
-ron = "0.5"
+minireq = "2"

@@ -1,198 +1,158 @@
 use synadminctl::Service;
 
-use std::io::Write;
+use async_trait::async_trait;
 
+struct MinireqService;
 
-struct MinreqService;
-
-// TODO: das hier verwendet minireq types als allgemeine typen, wär natürlich schöner da was
-// abstraktes wie http_types hinzustellen, aber das zwingt einem zu einem async body type
-
-impl synadminctl::Service<minreq::Request> for MinreqService
+#[async_trait]
+impl synadminctl::Service<http_types::Request> for MinireqService
 {
-    type Response = minreq::Response;
-    type Error = minreq::Error;
+    type Response = http_types::Response;
+    type Error = http_types::Error;
 
-    fn call(&mut self, req: minreq::Request) -> Result<Self::Response, Self::Error> {
-        req.send()
+    async fn call(&mut self, req: http_types::Request) -> Result<Self::Response, Self::Error> {
+        let mini_req = match req.method() {
+            http_types::Method::Get => minireq::get(req.url()),
+            http_types::Method::Head => minireq::head(req.url()),
+            http_types::Method::Post => minireq::post(req.url()),
+            http_types::Method::Put => minireq::put(req.url()),
+            http_types::Method::Delete => minireq::delete(req.url()),
+            http_types::Method::Connect => minireq::connect(req.url()),
+            http_types::Method::Options => minireq::options(req.url()),
+            http_types::Method::Trace => minireq::trace(req.url()),
+            http_types::Method::Patch => minireq::patch(req.url()),
+        };
+        let mini_req = mini_req.with_header().with_body(req.into().read_to_string())
+
+        // async_std::task::block_on(async move {
+            // let stream = self.stream.lock().await;
+            async_h1::client::connect(self.stream.clone(), req).await
+        // })
     }
 }
 
-#[derive(Clone, Debug, serde::Deserialize, Eq, Hash, PartialEq, serde::Serialize)]
-pub struct Session {
-    /// The access token used for this session.
-    pub access_token: String,
-    /// The user the access token was issued for.
-    pub user_id: String,
-    /// The ID of the client device
-    pub device_id: String,
+
+
+struct AsyncH1HttpsService {
+    // stream: async_std::sync::Arc<async_std::sync::Mutex<async_native_tls::TlsStream<async_std::net::TcpStream>>>,
+    stream: async_std::net::TcpStream,
+    // stream: ClonableTlsStream,
 }
 
-fn load_session() -> Result<Session, anyhow::Error> {
-    let file = std::fs::File::open("session.ron")?;
-    let reader = std::io::BufReader::new(file);
-    let session = ron::de::from_reader(reader)?;
-    Ok(session)
+impl AsyncH1HttpsService {
+    fn new(host: String) -> AsyncH1HttpsService {
+        // TODO: könnte man auch mit default headers die authorization abfrühstücken?
+        let stream = async_std::task::block_on(async {
+            async_std::net::TcpStream::connect(&host).await.unwrap()
+            // let stream = async_std::net::TcpStream::connect(&host).await.unwrap();
+            // async_native_tls::connect(&host, stream).await.unwrap()
+            // let connector = async_tls::TlsConnector::default();
+            // let handshake = connector.connect(&host, stream).unwrap();
+            // let mut stream = handshake.await.unwrap();
+        });
+
+        Self {
+            // stream: async_std::sync::Arc::new(async_std::sync::Mutex::new(stream)),
+            // stream: ClonableTlsStream(async_std::sync::Arc::new(stream)),
+            stream: stream,
+        }
+    }
 }
 
-fn store_session(session: Session) -> Result<(), anyhow::Error> {
-    let file = std::fs::File::create("session.ron")?;
-    let mut buffer = std::io::BufWriter::new(file);
-    Ok(write!(
-        &mut buffer,
-        "{}",
-        ron::ser::to_string_pretty(&session, ron::ser::PrettyConfig::default())?
-    )?)
+#[async_trait]
+impl synadminctl::Service<http_types::Request> for AsyncH1HttpsService
+{
+    type Response = http_types::Response;
+    type Error = http_types::Error;
+
+    async fn call(&mut self, req: http_types::Request) -> Result<Self::Response, Self::Error> {
+        // let ptr = unsafe {
+        //     self.stream.get()
+        // };
+
+        // async_std::task::block_on(async move {
+            // let stream = self.stream.lock().await;
+            async_h1::client::connect(self.stream.clone(), req).await
+        // })
+    }
 }
 
 
-fn main() {
-    let http_service = MinreqService {};
+
+// struct ReqwestHttpService {
+//     client: reqwest::blocking::Client,
+// }
+
+// impl ReqwestHttpService {
+//     fn new() -> ReqwestHttpService {
+//         // TODO: man könnte auch mit default headers die authorization abfrühstücken
+//         Self {
+//             client: reqwest::blocking::Client::new(),
+//         }
+//     }
+// }
+
+
+// fn from_http_into_reqwest_request(req: http::Request<Vec<u8>>) -> reqwest::blocking::Request {
+//     let (parts, body) = req.into_parts();
+//     let http::request::Parts {
+//         method,
+//         uri,
+//         headers,
+//         ..
+//     } = parts;
+//     let url = reqwest::Url::parse(&uri.to_string()).unwrap();
+//     let mut req = reqwest::blocking::Request::new(
+//         method,
+//         url,
+//         );
+//     *req.headers_mut() = headers;
+//     *req.body_mut() = Some(body.into());
+//     req
+// }
+
+// fn from_reqwest_into_http_response(resp: reqwest::blocking::Response) -> http::Response<Vec<u8>> {
+//     let builder = http::Response::builder()
+//         .status(resp.status())
+//         .version(resp.version());
+//     {
+//         let mut headers = builder.headers_mut().unwrap();
+//         *headers = *resp.headers();
+//     }
+//     builder.body(resp.into()).unwrap()
+// }
+
+
+
+// impl synadminctl::Service<http::Request<Vec<u8>>> for ReqwestHttpService
+// {
+//     type Response = http::Response<Vec<u8>>;
+//     type Error = http::Error;
+
+//     fn call(&mut self, req: http::Request<Vec<u8>>) -> Result<Self::Response, Self::Error> {
+//         let req = from_http_into_reqwest_request(req);
+//         let resp = self.client.execute(req).unwrap();
+//         Ok(from_reqwest_into_http_response(resp))
+//     }
+// }
+
+
+#[async_std::main]
+async fn main() -> http_types::Result<()> {
+    // let http_service = ReqwestHttpService::new();
+    let http_service = AsyncH1HttpsService::new("localhost:8008".to_string());
     let access_token = "blub".to_string();
+    let server_url = http_types::Url::parse("http://ayuthay.wolkenplanet.de:8008/").unwrap();
 
-    // let server_url = "https://ayuthay.wolkenplanet.de".to_string();
-    let server_url = "https://matrix.dsn.scc.kit.edu".to_string();
-
-
-    // TODO: hier gibt's ein gewisses Henne-Ei-Problem mit dem access token
     let mut admin_service = synadminctl::AdminService::new(
         http_service,
         access_token,
     );
     println!("Requesting…");
 
-    let initial_device_display_name = format!("Synadminctl on {}", hostname::get().unwrap().into_string().unwrap());
+    let request = synadminctl::VersionRequest::new(server_url);
+    let response = admin_service.call(request).await.unwrap();
+    println!("server_version: {}\npython_version: {}\n", response.server_version, response.python_version);
 
-    let session = if let Ok(session) = load_session() {
-        session
-    } else {
-        // TODO: do well-known server detection
-        print!("username: ");
-        std::io::stdout().flush().unwrap();
-        let mut username = String::new();
-        std::io::stdin().read_line(&mut username).unwrap();
-        let username = String::from(username.trim());
-
-        // could also prompt on stderr, should I?
-        let password = rpassword::prompt_password_stdout("password: ").unwrap();
-
-        let login_request = synadminctl::LoginRequest {
-            host: server_url.clone(),
-            kind: "m.login.password".to_string(),
-            identifier: synadminctl::IdentifierType {
-                kind: "m.id.user".to_string(),
-                user: username.clone(),
-            },
-            password: password,
-            // don't set device id here for now, but save them for later use together with access token
-            // TODO: wobei: wenn ich eine eindeutige ID generieren kann, kann ich auch eine eigene nehmen
-            // und hab ein Problem weniger, und eine sich nicht ändernde ID wenn man das access token
-            // wegschmeißt.
-            device_id: None,
-            initial_device_display_name: Some(initial_device_display_name),
-        };
-        let login_response = admin_service.call(login_request).unwrap();
-        let session = Session {
-            access_token: login_response.access_token,
-            user_id: login_response.user_id,
-            device_id: login_response.device_id,
-        };
-        store_session(session.clone()).unwrap();
-        session
-    };
-
-    // TODO: anderen login response kram mitverwenden
-
-    let http_service = MinreqService {};
-    let mut admin_service = synadminctl::AdminService::new(
-        http_service,
-        session.access_token,
-    );
-
-    // TODO: den access token dem Service zu geben, aber die Server URL dem Request, macht keinen
-    // Sinn, gerade wenn man an mehrere Server denkt, da Token und Server URL gekoppelt sind
-    // Vielleicht krieg ich das mit ureq besser hin? https://docs.rs/ureq/0.12.0/ureq/
-    // Gleichzeitig aber auch wieder: Ob ein Zugriff jetzt eine Authentifizierung braucht oder
-    // nicht weiß eigentlich nur der Request, der dann ein access token fordern könnte oder nicht…
-    // -> auch an symmetrische API denken!
-
-
-
-    // TODO: läuft auf matrix.dsn.scc.kit.edu in eine infinite recursion loop…?
-    // -> das passiert wenn /_synapse noch nicht freigeschaltet war
-    // let version_request = synadminctl::VersionRequest::new(server_url.clone());
-    // let version_response = admin_service.call(version_request).unwrap();
-    // println!("server_version: {}\npython_version: {}\n", version_response.server_version, version_response.python_version);
-
-    // let is_admin_request = synadminctl::IsAdminRequest {
-    //     host: server_url.clone(),
-    //     user_id: "@florian:wolkenplanet.de".to_string(),
-    // };
-    // let is_admin_response = admin_service.call(is_admin_request).unwrap();
-    // println!("{:?}", is_admin_response);
-
-
-    println!("new user creation");
-    print!("matrix id: ");
-    std::io::stdout().flush().unwrap();
-    let mut user_id = String::new();
-    std::io::stdin().read_line(&mut user_id).unwrap();
-    let user_id = String::from(user_id.trim());
-
-    print!("password: ");
-    std::io::stdout().flush().unwrap();
-    let mut password = String::new();
-    std::io::stdin().read_line(&mut password).unwrap();
-    let password = String::from(password.trim());
-
-
-    print!("displayname: ");
-    std::io::stdout().flush().unwrap();
-    let mut displayname = String::new();
-    std::io::stdin().read_line(&mut displayname).unwrap();
-    let displayname = String::from(displayname.trim());
-
-
-    print!("mail address: ");
-    std::io::stdout().flush().unwrap();
-    let mut mail_address = String::new();
-    std::io::stdin().read_line(&mut mail_address).unwrap();
-    let mail_address = String::from(mail_address.trim());
-    let threepids = vec![synadminctl::Threepid {
-        medium: "email".to_string(),
-        address: mail_address,
-    }];
-
-    // // TODO: das setzt zwar die E-Mail-Adresse, aber seltsamerweise nicht die Notifications by
-    // // default - möglicherweise der Unterschied weil über die API und nicht über die Registrierung
-    // // angelegt?
-    // // -> ich hab nen Issue gemeldet und soll es selbst machen
-    let create_account_request = synadminctl::CreateModifyAccountRequest {
-        host: server_url.clone(),
-        user_id: user_id,
-        password: password,
-        displayname: Some(displayname),
-        threepids: Some(threepids),
-        avatar_url: None,
-        admin: None,
-        deactivated: None,
-    };
-    println!("{:?}", create_account_request);
-    let create_account_response = admin_service.call(create_account_request).unwrap();
-    println!("{:?}", create_account_response);
-
-
-    // println!("room purging");
-    // print!("room_id: ");
-    // std::io::stdout().flush().unwrap();
-    // let mut room_id = String::new();
-    // std::io::stdin().read_line(&mut room_id).unwrap();
-    // let room_id = String::from(room_id.trim());
-
-    // let purge_room_request = synadminctl::PurgeRoomRequest {
-    //     host: server_url.clone(),
-    //     room_id: room_id,
-    // };
-    // let purge_room_response = admin_service.call(purge_room_request).unwrap();
-    // println!("{:?}", purge_room_response);
+    Ok(())
 }
