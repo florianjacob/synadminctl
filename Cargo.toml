@@ -8,7 +8,6 @@ edition = "2018"
 
 [dependencies]
 http = "0.2.1"
-minreq = { version = "2", features = ["https"] }
 reqwest = { version = "0.10", features = ["blocking"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
@@ -20,3 +19,6 @@ hostname = "0.3"
 ron = "0.5"
 thiserror = "1"
 structopt = "0.3"
+smol = { version = "0.1", features = ["tokio02"] }
+async-trait = "0.1"
+# surf = "1"

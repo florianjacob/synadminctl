@@ -1,10 +1,22 @@
-use std::convert::TryFrom;
 use std::convert::TryInto;
-use std::marker::PhantomData;
 use thiserror::Error;
+use std::sync::Arc;
 
 pub mod endpoints;
 pub use endpoints::*;
+
+use async_trait::async_trait;
+
+// difference from tower service:
+// A) async_trait, so that there isn't a manual third `Future` associated type
+// B) call is &self, i.e. not mut, so that we do not need to clone for exclusive ownership
+#[async_trait]
+pub trait Service<Request> {
+    type Response;
+    type Error;
+
+    async fn call(&self, _: Request) -> Result<Self::Response, Self::Error>;
+}
 
 
 // this would be RumaClientError if this was an actual Matrix library,
@@ -15,52 +27,62 @@ pub enum MatrixLibError {
     Deserialization(#[from] serde_json::Error),
     #[error("http response had unexpected error")]
     Http(http::Response<Vec<u8>>),
+    #[error("error when calling http")]
+    HttpService(#[from] anyhow::Error),
 }
 
-
-// state in which we wait to send a new matrix API call
-pub struct Sending;
-// state in which we wait to receive the network response, to convert it into a matrix API call Response
-pub struct Receiving<Response> {
-    _state: PhantomData<Response>,
+#[derive(Clone)]
+pub struct AnonymousMatrixService<T> {
+    inner: Arc<InnerAnonymousMatrixService<T>>,
 }
 
-// A channel to perform matrix API calls that do not require authentication
-pub struct AnonymousChannel<State> {
-    pub server_uri: http::Uri,
-    _state: PhantomData<State>
+struct InnerAnonymousMatrixService<T> {
+    http_service: T,
+    server_uri: http::Uri,
 }
 
-impl AnonymousChannel<Sending> {
-    pub fn new(server_uri: http::Uri) -> AnonymousChannel<Sending> {
+impl<S> AnonymousMatrixService<S>
+where
+    // TODO: this would benefit from trait aliases: https://github.com/rust-lang/rust/issues/63063
+    S: Service<http::Request<Vec<u8>>, Response=http::Response<Vec<u8>>, Error=anyhow::Error> + Send + Sync,
+{
+    pub fn new(http_service: S, server_uri: http::Uri) -> AnonymousMatrixService<S> {
         Self {
-            server_uri,
-            _state: PhantomData,
+            inner: Arc::new(InnerAnonymousMatrixService {
+                http_service,
+                server_uri,
+            }),
         }
     }
+}
 
-    pub fn send<Request: Endpoint>(self, request: Request) -> (AnonymousChannel<Receiving<Request::Response>>, http::Request<Vec<u8>>) {
+#[async_trait]
+impl<Request, S> Service<Request> for AnonymousMatrixService<S>
+where
+    Request: Endpoint + Send + 'static,
+    S: Service<http::Request<Vec<u8>>, Response=http::Response<Vec<u8>>, Error=anyhow::Error> + Send + Sync,
+{
+    type Response = Request::Response;
+    type Error = MatrixLibError;
+
+    // TODO: while this obviously implements Service for Request::Endpoint, implementing that trait utterly breaks
+    // and I don't understand why, probably due to #[async_trait] implementation awkwardnesses
+    async fn call(&self, request: Request) -> Result<Self::Response, Self::Error> {
         let mut http_request: http::Request<Vec<u8>> = request.into();
         assert!(!Request::REQUIRES_AUTHENTICATION);
 
-        let mut server_parts = self.server_uri.clone().into_parts();
+        let mut server_parts = self.inner.server_uri.clone().into_parts();
         server_parts.path_and_query = http_request.uri().path_and_query().cloned();
         *http_request.uri_mut() = http::Uri::from_parts(server_parts).unwrap();
 
-        (AnonymousChannel { server_uri: self.server_uri, _state: PhantomData }, http_request)
+        let http_response = self.inner.http_service.call(http_request).await?;
+
+        let matrix_response = http_response.try_into();
+        matrix_response
     }
+
 }
 
-
-impl<Response> AnonymousChannel<Receiving<Response>>
-    where Response: TryFrom<http::Response<Vec<u8>>, Error = MatrixLibError>
-{
-    pub fn recv(self, response: http::Response<Vec<u8>>) -> (AnonymousChannel<Sending>, Result<Response, MatrixLibError>) {
-        let matrix_response = response.try_into();
-
-        (AnonymousChannel { server_uri: self.server_uri, _state: PhantomData }, matrix_response)
-    }
-}
 
 #[derive(Clone, Debug, serde::Deserialize, Eq, Hash, PartialEq, serde::Serialize)]
 pub struct Session {
@@ -73,47 +95,56 @@ pub struct Session {
     pub device_id: String,
 }
 
-
-pub struct Channel<State> {
+#[derive(Clone)]
+pub struct MatrixService<S> {
+    inner: Arc<InnerMatrixService<S>>,
+}
+struct InnerMatrixService<S> {
+    http_service: S,
     server_uri: http::Uri,
     authorization_header_value: http::HeaderValue,
-    _state: PhantomData<State>
 }
 
-// A channel to perform matrix API calls that can require authentication
-impl Channel<Sending> {
-    pub fn new(server_uri: http::Uri, access_token: String) -> Channel<Sending> {
+impl<S> MatrixService<S>
+where
+    S: Service<http::Request<Vec<u8>>, Response=http::Response<Vec<u8>>, Error=anyhow::Error>,
+{
+    pub fn new(http_service: S, server_uri: http::Uri, access_token: String) -> MatrixService<S> {
         let authorization_string = format!("Bearer {}", access_token);
         let authorization_header_value = http::HeaderValue::from_str(&authorization_string).unwrap();
         Self {
-            server_uri,
-            authorization_header_value,
-            _state: PhantomData,
+            inner: Arc::new(InnerMatrixService {
+                http_service,
+                server_uri,
+                authorization_header_value,
+            }),
         }
-    }
-
-    pub fn send<Request: Endpoint>(self, request: Request) -> (Channel<Receiving<Request::Response>>, http::Request<Vec<u8>>) {
-        let mut http_request: http::Request<Vec<u8>> = request.into();
-        if Request::REQUIRES_AUTHENTICATION {
-            http_request.headers_mut().insert("Authorization", self.authorization_header_value.clone());
-        }
-
-        let mut server_parts = self.server_uri.clone().into_parts();
-        server_parts.path_and_query = http_request.uri().path_and_query().cloned();
-        *http_request.uri_mut() = http::Uri::from_parts(server_parts).unwrap();
-
-        (Channel { server_uri: self.server_uri, authorization_header_value: self.authorization_header_value, _state: PhantomData }, http_request)
     }
 }
 
-
-impl<Response> Channel<Receiving<Response>>
-    where Response: TryFrom<http::Response<Vec<u8>>, Error = MatrixLibError>
+#[async_trait]
+impl<Request, S> Service<Request> for MatrixService<S>
+where
+    Request: Endpoint + Send + 'static,
+    S: Service<http::Request<Vec<u8>>, Response=http::Response<Vec<u8>>, Error=anyhow::Error> + Send + Sync,
 {
-    pub fn recv(self, response: http::Response<Vec<u8>>) -> (Channel<Sending>, Result<Response, MatrixLibError>) {
-        let matrix_response = response.try_into();
+    type Response = Request::Response;
+    type Error = MatrixLibError;
 
-        (Channel { server_uri: self.server_uri, authorization_header_value: self.authorization_header_value, _state: PhantomData }, matrix_response)
+    async fn call(&self, request: Request) -> Result<Self::Response, Self::Error> {
+        let mut http_request: http::Request<Vec<u8>> = request.into();
+        if Request::REQUIRES_AUTHENTICATION {
+            http_request.headers_mut().insert("Authorization", self.inner.authorization_header_value.clone());
+        }
+
+        let mut server_parts = self.inner.server_uri.clone().into_parts();
+        server_parts.path_and_query = http_request.uri().path_and_query().cloned();
+        *http_request.uri_mut() = http::Uri::from_parts(server_parts).unwrap();
+
+        let http_response = self.inner.http_service.call(http_request).await?;
+
+        let matrix_response = http_response.try_into();
+        matrix_response
     }
 }
 
@@ -142,140 +173,87 @@ pub enum AutoDiscoveryError {
     FailError(String),
 }
 
-// state machine to perform full server autodiscovery,
-// in accordance with https://matrix.org/docs/spec/client_server/latest#server-discovery
-pub struct ServerDiscovery<State> {
-    channel: AnonymousChannel<State>,
-}
-
-// subsequent state group to ServerDiscovery, in which the acquired DiscoveryInfo is validated
-pub struct ServerDiscoveryValidation<State> {
-    discovery_info: DiscoveryInfo,
-    channel: AnonymousChannel<State>,
-}
-
-
-impl ServerDiscovery<Sending> {
-    pub fn send(user_id: String) -> Result<(ServerDiscovery<Receiving<DiscoveryResponse>>, http::Request<Vec<u8>>), AutoDiscoveryError> {
-        // https://matrix.org/docs/spec/client_server/latest#well-known-uri
-        // 1. Extract the server name from the user's Matrix ID by splitting the Matrix ID at the first colon.
-        // 2. Extract the hostname from the server name.
-        // Grammar:
-        // server_name = hostname [ ":" port ]
-        // user_id = "@" user_id_localpart ":" server_name
-        let parts: Vec<&str> = user_id.split(':').collect();
-        if parts.len() != 2 || parts.len() != 3 {
-            // user_id is not a full user_id but just a username or something like that,
-            // so a hostname cannot be extracted
-            return Err(AutoDiscoveryError::Prompt);
-        }
-        let hostname = parts[1];
-        // 3. Make a GET request to https://hostname/.well-known/matrix/client.
-        let domain = "https://".to_string() + hostname;
-        let channel = AnonymousChannel::new(domain.parse().unwrap());
-
-        // 3. Make a GET request to https://hostname/.well-known/matrix/client.
-        let (channel, http_request) = channel.send(DiscoveryRequest);
-        Ok((ServerDiscovery {
-            channel,
-        }, http_request))
+pub async fn server_discovery<S>(http_service: S, user_id: String) -> Result<DiscoveryInfo, AutoDiscoveryError>
+    where S: Service<http::Request<Vec<u8>>, Response=http::Response<Vec<u8>>, Error=anyhow::Error> + Clone + Send + Sync
+{
+    // https://matrix.org/docs/spec/client_server/latest#well-known-uri
+    // 1. Extract the server name from the user's Matrix ID by splitting the Matrix ID at the first colon.
+    // 2. Extract the hostname from the server name.
+    // Grammar:
+    // server_name = hostname [ ":" port ]
+    // user_id = "@" user_id_localpart ":" server_name
+    let parts: Vec<&str> = user_id.split(':').collect();
+    if parts.len() != 2 && parts.len() != 3 {
+        // user_id is not a full user_id but just a username or something like that,
+        // so a hostname cannot be extracted
+        dbg!("invalid userid format: {}, {}", parts.len(), parts);
+        return Err(AutoDiscoveryError::Prompt);
     }
-}
+    let hostname = parts[1];
+    // 3. Make a GET request to https://hostname/.well-known/matrix/client.
+    let domain = "https://".to_string() + hostname;
+    let service = AnonymousMatrixService::new(http_service.clone(), domain.parse().unwrap());
 
-impl ServerDiscovery<Receiving<DiscoveryResponse>> {
-    pub fn recv(self, http_response: http::Response<Vec<u8>>)
-        -> Result<(ServerDiscoveryValidation<Receiving<ClientVersionResponse>>, http::Request<Vec<u8>>), AutoDiscoveryError>
-    {
-        // 3c. Parse the response body as a JSON object
-        let (channel, discovery_response) = self.channel.recv(http_response);
+    // 3. Make a GET request to https://hostname/.well-known/matrix/client.
+    // 3c. Parse the response body as a JSON object
+    let discovery_response = service.call(DiscoveryRequest).await;
 
-        let discovery_info = match discovery_response {
-            // 3a. If the returned status code is 404, then IGNORE.
-            Ok(DiscoveryResponse::None) => Err(AutoDiscoveryError::Ignore),
-            // 3b. If the returned status code is not 200, or the response body is empty, then FAIL_PROMPT.
-            Err(MatrixLibError::Http(error_response)) => Err(AutoDiscoveryError::FailPrompt(format!("{}", error_response.status()))),
-            // 3ci. If the content cannot be parsed, then FAIL_PROMPT.
-            // 3di. If this value is not provided, then FAIL_PROMPT.
-            Err(MatrixLibError::Deserialization(source_error)) => Err(AutoDiscoveryError::FailPrompt(format!("{}", source_error))),
-            Ok(DiscoveryResponse::Some(discovery_info)) => Ok(discovery_info),
-        };
-
-
-        // this is our only autodiscovery mechanism,
-        // therefore map Ignore to Prompt and possibly return
-        let discovery_info = discovery_info.map_err(
-            |error| if error == AutoDiscoveryError::Ignore { AutoDiscoveryError::Prompt } else { error })?;
+    let discovery_info = match discovery_response {
+        // 3a. If the returned status code is 404, then IGNORE.
+        Ok(DiscoveryResponse::None) => Err(AutoDiscoveryError::Ignore),
+        // 3b. If the returned status code is not 200, or the response body is empty, then FAIL_PROMPT.
+        Err(MatrixLibError::Http(error_response)) => Err(AutoDiscoveryError::FailPrompt(format!("{}", error_response.status()))),
+        // 3ci. If the content cannot be parsed, then FAIL_PROMPT.
+        // 3di. If this value is not provided, then FAIL_PROMPT.
+        Err(MatrixLibError::Deserialization(source_error)) => Err(AutoDiscoveryError::FailPrompt(format!("{}", source_error))),
+        Err(MatrixLibError::HttpService(source_error)) => Err(AutoDiscoveryError::FailPrompt(format!("{}", source_error))),
+        Ok(DiscoveryResponse::Some(discovery_info)) => Ok(discovery_info),
+    };
 
 
-        // 3d. Extract the base_url value from the m.homeserver property.
-        //     This value is to be used as the base URL of the homeserver.
-        // 3e. Validate the homeserver base URL:
-        match discovery_info.homeserver.base_url.parse() {
-            // 3ei. Parse it as a URL. If it is not a URL, then FAIL_ERROR.
-            Err(error) => Err(AutoDiscoveryError::FailError(format!("{}", error))),
-            Ok(base_url) => {
-                let channel = AnonymousChannel::new(base_url);
-                let (channel, http_request) = channel.send(ClientVersionRequest);
-                Ok((ServerDiscoveryValidation::<Receiving<ClientVersionResponse>> {
-                    discovery_info,
-                    channel,
-                }, http_request))
-            },
-        }
-    }
-}
+    // this is our only autodiscovery mechanism,
+    // therefore map Ignore to Prompt and possibly return
+    let discovery_info = discovery_info.map_err(
+        |error| if error == AutoDiscoveryError::Ignore { dbg!("no valid record"); AutoDiscoveryError::Prompt } else { error })?;
 
-impl ServerDiscoveryValidation<Receiving<ClientVersionResponse>> {
-    pub fn validate_homeserver(self, http_response: http::Response<Vec<u8>>)
-        -> Result<Result<DiscoveryInfo, (ServerDiscoveryValidation<Receiving<IdentityStatusResponse>>, http::Request<Vec<u8>>)>, AutoDiscoveryError>
-    {
-        // 3eii. Clients SHOULD validate that the URL points to a valid homeserver before accepting it
-        //     by connecting to the /_matrix/client/versions endpoint,
-        //     ensuring that it does not return an error,
-        //     and parsing and validating that the data conforms with the expected response format.
-        //     If any step in the validation fails, then FAIL_ERROR.
-        //     Validation is done as a simple check against configuration errors,
-        //     in order to ensure that the discovered address points to a valid homeserver.
-        let (channel, version_response) = self.channel.recv(http_response);
-        if let Err(error) = version_response {
-            return Err(AutoDiscoveryError::FailError(format!("{}", error)));
-        }
 
-        if let Some(identity_server_info) = &self.discovery_info.identity_server {
-            // 3fi. Parse it as a URL. If it is not a URL, then FAIL_ERROR.
-            let base_url = identity_server_info.base_url.parse()
-                .map_err(|error| AutoDiscoveryError::FailError(format!("{}", error)))?;
-            let channel = AnonymousChannel::new(base_url);
-            let (channel, http_request) = channel.send(IdentityStatusRequest);
-            Ok(Err((ServerDiscoveryValidation::<Receiving<IdentityStatusResponse>> {
-                discovery_info: self.discovery_info,
-                channel,
-            }, http_request)))
-        }
-        else {
-            Ok(Ok(self.discovery_info))
-        }
-    }
-}
+    // 3d. Extract the base_url value from the m.homeserver property.
+    //     This value is to be used as the base URL of the homeserver.
+    // 3e. Validate the homeserver base URL:
+    // 3ei. Parse it as a URL. If it is not a URL, then FAIL_ERROR.
+    let base_url = discovery_info.homeserver.base_url.parse()
+        .map_err(|error| AutoDiscoveryError::FailError(format!("{}", error)))?;
+    let service = AnonymousMatrixService::new(http_service.clone(), base_url);
+    // 3eii. Clients SHOULD validate that the URL points to a valid homeserver before accepting it
+    //     by connecting to the /_matrix/client/versions endpoint,
+    //     ensuring that it does not return an error,
+    //     and parsing and validating that the data conforms with the expected response format.
+    //     If any step in the validation fails, then FAIL_ERROR.
+    //     Validation is done as a simple check against configuration errors,
+    //     in order to ensure that the discovered address points to a valid homeserver.
+    let _ = service.call(ClientVersionRequest).await
+        .map_err(|error| AutoDiscoveryError::FailError(format!("{}", error)))?;
 
-impl ServerDiscoveryValidation<Receiving<IdentityStatusResponse>> {
-    pub fn validate_identity_server(self, http_response: http::Response<Vec<u8>>)
-        -> Result<DiscoveryInfo, AutoDiscoveryError>
-    {
-        // If the m.identity_server property is present, extract the base_url value for use as the
-        // base URL of the identity server. Validation for this URL is done as in the step above,
-        // but using /_matrix/identity/api/v1 as the endpoint to connect to. If the
-        // m.identity_server property is present, but does not have a base_url value, then
-        // FAIL_ERROR.
 
-        let (channel, identity_status_response) = self.channel.recv(http_response);
+    // If the m.identity_server property is present, extract the base_url value for use as the
+    // base URL of the identity server. Validation for this URL is done as in the step above,
+    // but using /_matrix/identity/api/v1 as the endpoint to connect to. If the
+    // m.identity_server property is present, but does not have a base_url value, then
+    // FAIL_ERROR.
+    if let Some(identity_server_info) = &discovery_info.identity_server {
+        let base_url = identity_server_info.base_url.parse()
+            .map_err(|error| AutoDiscoveryError::FailError(format!("{}", error)))?;
+        let service = AnonymousMatrixService::new(http_service.clone(), base_url);
+        let identity_status_response = service.call(IdentityStatusRequest).await;
+
         identity_status_response
-            .and(Ok(self.discovery_info))
+            .and(Ok(discovery_info))
             .map_err(|error| AutoDiscoveryError::FailError(format!("{}", error)))
     }
+    else {
+        Ok(discovery_info)
+    }
 }
 
 
-
-
-// TODO: try out a Paging API, and how that is written down as State Machine API
+// TODO: try out a Paging API
