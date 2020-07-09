@@ -3,6 +3,7 @@ use thiserror::Error;
 use std::sync::Arc;
 
 pub mod endpoints;
+pub mod http_services;
 pub use endpoints::*;
 
 use async_trait::async_trait;
@@ -257,3 +258,29 @@ pub async fn server_discovery<S>(http_service: S, user_id: String) -> Result<Dis
 
 
 // TODO: try out a Paging API
+
+
+#[cfg(test)]
+mod tests {
+    use super::Service;
+
+    // TODO: move to unit test
+    async fn test_version_service() {
+        let server_uri = http::Uri::from_static("https://ayuthay.wolkenplanet.de");
+
+        let service = super::AnonymousMatrixService::new(super::http_services::ReqwestService::new(), server_uri.clone());
+
+        // TODO: VersionRequest runs into an infinite recursion loop when /_synapse is not yet activated in nginx
+        let version_request = super::VersionRequest;
+        let version_response = service.call(version_request).await.unwrap();
+        println!("{:?}", version_response);
+    }
+
+    #[test]
+    fn run() {
+        smol::run(async {
+            test_version_service().await
+        });
+    }
+}
+
