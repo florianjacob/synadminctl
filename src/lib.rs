@@ -26,6 +26,7 @@ pub trait Service<Request> {
 pub enum MatrixLibError {
     #[error("received malformed json")]
     Deserialization(#[from] serde_json::Error),
+    // TODO: this serializes as actual array of ints, should be deserialized into a string somehow
     #[error("http response had unexpected error")]
     Http(http::Response<Vec<u8>>),
     #[error("error when calling http")]
