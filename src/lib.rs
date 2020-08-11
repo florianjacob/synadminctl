@@ -1,10 +1,12 @@
 use std::convert::TryInto;
 use thiserror::Error;
 use std::sync::Arc;
+use std::ops::Deref;
 
 pub mod endpoints;
 pub mod http_services;
 pub use endpoints::*;
+
 
 use async_trait::async_trait;
 
@@ -23,24 +25,28 @@ pub trait Service<Request> {
 // this would be RumaClientError if this was an actual Matrix library,
 // and should not contain Synadminctl-specific errors
 #[derive(Error, Debug)]
-pub enum MatrixLibError {
-    #[error("received malformed json")]
-    Deserialization(#[from] serde_json::Error),
+pub enum MatrixLibError<E: std::error::Error + 'static> {
+    // #[error("received malformed json")]
+    // Deserialization(#[from] serde_json::Error),
     // TODO: this serializes as actual array of ints, should be deserialized into a string somehow
-    #[error("http response had unexpected error")]
-    Http(http::Response<Vec<u8>>),
+    // #[error("http response had unexpected error")]
+    // Http(http::Response<Vec<u8>>),
+    #[error("error when parsing http response")]
+    FromHttpResponseError(#[from] ruma::api::error::FromHttpResponseError<E>),
+    #[error("error when converting to http request")]
+    IntoHttpError(#[from] ruma::api::error::IntoHttpError),
     #[error("error when calling http")]
     HttpService(#[from] anyhow::Error),
 }
 
 #[derive(Clone)]
-pub struct AnonymousMatrixService<T> {
-    inner: Arc<InnerAnonymousMatrixService<T>>,
+pub struct AnonymousMatrixService<S> {
+    inner: Arc<InnerAnonymousMatrixService<S>>,
 }
 
-struct InnerAnonymousMatrixService<T> {
-    http_service: T,
-    server_uri: http::Uri,
+struct InnerAnonymousMatrixService<S> {
+    http_service: S,
+    base_url: String,
 }
 
 impl<S> AnonymousMatrixService<S>
@@ -48,11 +54,11 @@ where
     // TODO: this would benefit from trait aliases: https://github.com/rust-lang/rust/issues/63063
     S: Service<http::Request<Vec<u8>>, Response=http::Response<Vec<u8>>, Error=anyhow::Error> + Send + Sync,
 {
-    pub fn new(http_service: S, server_uri: http::Uri) -> AnonymousMatrixService<S> {
+    pub fn new(http_service: S, base_url: String) -> AnonymousMatrixService<S> {
         Self {
             inner: Arc::new(InnerAnonymousMatrixService {
                 http_service,
-                server_uri,
+                base_url,
             }),
         }
     }
@@ -61,34 +67,30 @@ where
 #[async_trait]
 impl<Request, S> Service<Request> for AnonymousMatrixService<S>
 where
-    Request: Endpoint + Send + 'static,
+    Request: ruma::api::OutgoingRequest + ruma::api::OutgoingNonAuthRequest + Send + 'static,
     S: Service<http::Request<Vec<u8>>, Response=http::Response<Vec<u8>>, Error=anyhow::Error> + Send + Sync,
 {
-    type Response = Request::Response;
-    type Error = MatrixLibError;
+    type Response = Request::IncomingResponse;
+    type Error = MatrixLibError<Request::EndpointError>;
 
-    // TODO: while this obviously implements Service for Request::Endpoint, implementing that trait utterly breaks
-    // and I don't understand why, probably due to #[async_trait] implementation awkwardnesses
     async fn call(&self, request: Request) -> Result<Self::Response, Self::Error> {
-        let mut http_request: http::Request<Vec<u8>> = request.into();
-        assert!(!Request::REQUIRES_AUTHENTICATION);
-
-        let mut server_parts = self.inner.server_uri.clone().into_parts();
-        server_parts.path_and_query = http_request.uri().path_and_query().cloned();
-        *http_request.uri_mut() = http::Uri::from_parts(server_parts).unwrap();
+        let http_request: http::Request<Vec<u8>> = {
+            let inner = self.inner.clone();
+            request.try_into_http_request(&inner.deref().base_url, None)?
+        };
 
         let http_response = self.inner.http_service.call(http_request).await?;
 
-        let matrix_response = http_response.try_into();
-        matrix_response
+        Ok(http_response.try_into()?)
     }
 
 }
 
 
+
 #[derive(Clone, Debug, serde::Deserialize, Eq, Hash, PartialEq, serde::Serialize)]
 pub struct Session {
-    pub server_uri: String,
+    pub base_url: String,
     /// The user the access token was issued for.
     pub user_id: String,
     /// The access token used for this session.
@@ -103,22 +105,20 @@ pub struct MatrixService<S> {
 }
 struct InnerMatrixService<S> {
     http_service: S,
-    server_uri: http::Uri,
-    authorization_header_value: http::HeaderValue,
+    base_url: String,
+    access_token: String,
 }
 
 impl<S> MatrixService<S>
 where
     S: Service<http::Request<Vec<u8>>, Response=http::Response<Vec<u8>>, Error=anyhow::Error>,
 {
-    pub fn new(http_service: S, server_uri: http::Uri, access_token: String) -> MatrixService<S> {
-        let authorization_string = format!("Bearer {}", access_token);
-        let authorization_header_value = http::HeaderValue::from_str(&authorization_string).unwrap();
+    pub fn new(http_service: S, base_url: String, access_token: String) -> MatrixService<S> {
         Self {
             inner: Arc::new(InnerMatrixService {
                 http_service,
-                server_uri,
-                authorization_header_value,
+                base_url,
+                access_token,
             }),
         }
     }
@@ -127,26 +127,21 @@ where
 #[async_trait]
 impl<Request, S> Service<Request> for MatrixService<S>
 where
-    Request: Endpoint + Send + 'static,
+    Request: ruma::api::OutgoingRequest + Send + 'static,
     S: Service<http::Request<Vec<u8>>, Response=http::Response<Vec<u8>>, Error=anyhow::Error> + Send + Sync,
 {
-    type Response = Request::Response;
-    type Error = MatrixLibError;
+    type Response = Request::IncomingResponse;
+    type Error = MatrixLibError<Request::EndpointError>;
 
     async fn call(&self, request: Request) -> Result<Self::Response, Self::Error> {
-        let mut http_request: http::Request<Vec<u8>> = request.into();
-        if Request::REQUIRES_AUTHENTICATION {
-            http_request.headers_mut().insert("Authorization", self.inner.authorization_header_value.clone());
-        }
-
-        let mut server_parts = self.inner.server_uri.clone().into_parts();
-        server_parts.path_and_query = http_request.uri().path_and_query().cloned();
-        *http_request.uri_mut() = http::Uri::from_parts(server_parts).unwrap();
+        let http_request: http::Request<Vec<u8>> = {
+            let inner = self.inner.clone();
+            request.try_into_http_request(&inner.deref().base_url, Some(&inner.deref().access_token))?
+        };
 
         let http_response = self.inner.http_service.call(http_request).await?;
 
-        let matrix_response = http_response.try_into();
-        matrix_response
+        Ok(http_response.try_into()?)
     }
 }
 
@@ -175,7 +170,7 @@ pub enum AutoDiscoveryError {
     FailError(String),
 }
 
-pub async fn server_discovery<S>(http_service: S, user_id: String) -> Result<DiscoveryInfo, AutoDiscoveryError>
+pub async fn server_discovery<S>(http_service: S, user_id: String) -> Result<ruma::api::client::r0::session::login::DiscoveryInfo, AutoDiscoveryError>
     where S: Service<http::Request<Vec<u8>>, Response=http::Response<Vec<u8>>, Error=anyhow::Error> + Clone + Send + Sync
 {
     // https://matrix.org/docs/spec/client_server/latest#well-known-uri
@@ -194,22 +189,56 @@ pub async fn server_discovery<S>(http_service: S, user_id: String) -> Result<Dis
     let hostname = parts[1];
     // 3. Make a GET request to https://hostname/.well-known/matrix/client.
     let domain = "https://".to_string() + hostname;
+    // TODO: why is this unwrap ok?
     let service = AnonymousMatrixService::new(http_service.clone(), domain.parse().unwrap());
 
     // 3. Make a GET request to https://hostname/.well-known/matrix/client.
     // 3c. Parse the response body as a JSON object
-    let discovery_response = service.call(DiscoveryRequest).await;
+    let discovery_response = service.call(ruma::api::client::unversioned::discover_homeserver::Request).await;
 
     let discovery_info = match discovery_response {
+        // error on serializing into http request
+        Err(MatrixLibError::IntoHttpError(error)) =>
+            Err(AutoDiscoveryError::FailPrompt(format!("{}", error))),
         // 3a. If the returned status code is 404, then IGNORE.
-        Ok(DiscoveryResponse::None) => Err(AutoDiscoveryError::Ignore),
-        // 3b. If the returned status code is not 200, or the response body is empty, then FAIL_PROMPT.
-        Err(MatrixLibError::Http(error_response)) => Err(AutoDiscoveryError::FailPrompt(format!("{}", error_response.status()))),
+        Err(MatrixLibError::FromHttpResponseError(error)) => {
+            match error {
+                ruma::api::error::FromHttpResponseError::Deserialization(source_error) =>
+                    Err(AutoDiscoveryError::FailPrompt(format!("{}", source_error))),
+                ruma::api::error::FromHttpResponseError::Http(server_error) => match server_error {
+                    ruma::api::error::ServerError::Known(error) => {
+                        if error.status_code == http::StatusCode::NOT_FOUND {
+                            Err(AutoDiscoveryError::Ignore)
+                        }
+                        // 3b. If the returned status code is not 200, or the response body is empty, then FAIL_PROMPT.
+                        else {
+                            Err(AutoDiscoveryError::FailPrompt(format!("{}", error)))
+                        }
+                    }
+                    // this is a deserialization error of the endpoint error
+                    ruma::api::error::ServerError::Unknown(error) =>
+                        Err(AutoDiscoveryError::FailPrompt(format!("{}", error))),
+                },
+                _ => Err(AutoDiscoveryError::FailPrompt("FromHttpResponseError has gained an unhandeld variant".to_string())),
+            }
+        },
+
+        // // 3b. If the returned status code is not 200, or the response body is empty, then FAIL_PROMPT.
+        // Err(MatrixLibError::Http(error_response)) => Err(AutoDiscoveryError::FailPrompt(format!("{}", error_response.status()))),
         // 3ci. If the content cannot be parsed, then FAIL_PROMPT.
         // 3di. If this value is not provided, then FAIL_PROMPT.
-        Err(MatrixLibError::Deserialization(source_error)) => Err(AutoDiscoveryError::FailPrompt(format!("{}", source_error))),
+        // Err(MatrixLibError::Deserialization(source_error)) => Err(AutoDiscoveryError::FailPrompt(format!("{}", source_error))),
         Err(MatrixLibError::HttpService(source_error)) => Err(AutoDiscoveryError::FailPrompt(format!("{}", source_error))),
-        Ok(DiscoveryResponse::Some(discovery_info)) => Ok(discovery_info),
+        // TODO: those types are the same, however they're deeply disconnected types in ruma
+        Ok(discovery_response) => Ok(ruma::api::client::r0::session::login::DiscoveryInfo {
+            homeserver: ruma::api::client::r0::session::login::HomeserverInfo {
+                base_url: discovery_response.homeserver.base_url,
+            },
+            identity_server: discovery_response.identity_server.map(|identity_server|
+                ruma::api::client::r0::session::login::IdentityServerInfo {
+                    base_url: identity_server.base_url,
+                }),
+        }),
     };
 
 
@@ -233,7 +262,7 @@ pub async fn server_discovery<S>(http_service: S, user_id: String) -> Result<Dis
     //     If any step in the validation fails, then FAIL_ERROR.
     //     Validation is done as a simple check against configuration errors,
     //     in order to ensure that the discovered address points to a valid homeserver.
-    let _ = service.call(ClientVersionRequest).await
+    let _ = service.call(ruma::api::client::unversioned::get_supported_versions::Request).await
         .map_err(|error| AutoDiscoveryError::FailError(format!("{}", error)))?;
 
 
@@ -246,7 +275,7 @@ pub async fn server_discovery<S>(http_service: S, user_id: String) -> Result<Dis
         let base_url = identity_server_info.base_url.parse()
             .map_err(|error| AutoDiscoveryError::FailError(format!("{}", error)))?;
         let service = AnonymousMatrixService::new(http_service.clone(), base_url);
-        let identity_status_response = service.call(IdentityStatusRequest).await;
+        let identity_status_response = service.call(identity_status::Request).await;
 
         identity_status_response
             .and(Ok(discovery_info))

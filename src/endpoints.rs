@@ -1,447 +1,350 @@
-use std::convert::TryFrom;
 use serde::{Serialize, Deserialize};
-use std::collections::BTreeMap;
 
-use crate::MatrixLibError;
-
-pub trait Endpoint:
-    Into<http::Request<Vec<u8>>>
-{
-    /// Data returned in a successful response from the endpoint.
-    type Response: TryFrom<http::Response<Vec<u8>>, Error = MatrixLibError>;
-
-    const REQUIRES_AUTHENTICATION: bool;
-}
-
-
-// TODO: it's still way to go to a symmetric API for client & server…
-// TODO: For the admin APIs, I could use more robust serde_json::Values & co directly
-// instead of struct definitions and deserailization…
-// https://docs.rs/serde_json/1.0.50/serde_json/enum.Value.html#method.get
-
-
-// This should actually be an enum for all the identifier types,
-// but is essentially a struct just representing m.id.user.
-// at least, user cann be full Matrix ID or just the local part
-#[derive(Serialize)]
-pub struct IdentifierType {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub user: String,
-}
-
-// TODO: Login Type Request
-#[derive(Serialize)]
-pub struct LoginRequest {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub identifier: IdentifierType,
-    // actually optional, but this is tied to m.login.password
-    pub password: String,
-    pub device_id: Option<String>,
-    pub initial_device_display_name: Option<String>,
-}
-
-impl Endpoint for LoginRequest {
-    type Response = LoginResponse;
-    const REQUIRES_AUTHENTICATION: bool = false;
-}
-
-impl Into<http::Request<Vec<u8>>> for LoginRequest {
-    fn into(self) -> http::Request<Vec<u8>> {
-        let body = serde_json::to_vec(&self).unwrap();
-        let mut http_request = http::Request::new(body);
-        *http_request.uri_mut() = http::Uri::from_static("/_matrix/client/r0/login");
-        *http_request.method_mut() = http::Method::POST;
-        http_request
-    }
-}
-
-/// Client configuration provided by the server.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct DiscoveryInfo {
-    #[serde(rename = "m.homeserver")]
-    pub homeserver: HomeserverInfo,
-    #[serde(rename = "m.identity_server")]
-    pub identity_server: Option<IdentityServerInfo>,
-}
-
-/// Information about the homeserver to connect to.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct HomeserverInfo {
-    /// The base URL for the homeserver for client-server connections.
-    pub base_url: String,
-}
-
-/// Information about the identity server to connect to.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct IdentityServerInfo {
-    /// The base URL for the identity server for client-server connections.
-    pub base_url: String,
-}
-
-
-
-#[derive(Deserialize, Debug)]
-pub struct LoginResponse {
-    pub user_id: String,
-    pub access_token: String,
-    pub device_id: String,
-    pub well_known: Option<DiscoveryInfo>,
-    #[deprecated(note = "extract from user_id")]
-    home_server: Option<String>,
-}
-
-impl TryFrom<http::Response<Vec<u8>>> for LoginResponse {
-    type Error = MatrixLibError;
-
-    fn try_from(resp: http::Response<Vec<u8>>) -> Result<LoginResponse, Self::Error> {
-        if resp.status() == http::StatusCode::OK {
-            Ok(serde_json::from_slice(resp.body())?)
-        } else {
-            Err(MatrixLibError::Http(resp))
-        }
-    }
-}
-
-
-#[derive(Serialize)]
-pub struct VersionRequest;
-
-impl Into<http::Request<Vec<u8>>> for VersionRequest {
-    fn into(self) -> http::Request<Vec<u8>> {
-        let mut http_request = http::Request::new(vec![]);
-        *http_request.method_mut() = http::Method::GET;
-        *http_request.uri_mut() = http::Uri::from_static("/_synapse/admin/v1/server_version");
-        http_request
-    }
-}
-
-impl Endpoint for VersionRequest {
-    type Response = VersionResponse;
-    const REQUIRES_AUTHENTICATION: bool = false;
-}
-
-
-#[derive(Deserialize, Debug)]
-pub struct VersionResponse {
-    pub server_version: String,
-    pub python_version: String,
-}
-
-
-impl TryFrom<http::Response<Vec<u8>>> for VersionResponse {
-    type Error = MatrixLibError;
-
-    fn try_from(resp: http::Response<Vec<u8>>) -> Result<VersionResponse, Self::Error> {
-        if resp.status() == http::StatusCode::OK {
-            Ok(serde_json::from_slice(resp.body())?)
-        } else {
-            Err(MatrixLibError::Http(resp))
-        }
-    }
-}
-
-#[derive(Serialize)]
-pub struct ClientVersionRequest;
-
-impl Into<http::Request<Vec<u8>>> for ClientVersionRequest {
-    fn into(self) -> http::Request<Vec<u8>> {
-        let mut http_request = http::Request::new(vec![]);
-        *http_request.method_mut() = http::Method::GET;
-        *http_request.uri_mut() = http::Uri::from_static("/_matrix/client/versions");
-        http_request
-    }
-}
-
-impl Endpoint for ClientVersionRequest {
-    type Response = ClientVersionResponse;
-    const REQUIRES_AUTHENTICATION: bool = false;
-}
-
-
-#[derive(Deserialize, Debug)]
-pub struct ClientVersionResponse {
-    pub versions: Vec<String>,
-    pub unstable_features: Option<BTreeMap<String, bool>>,
-}
-
-
-impl TryFrom<http::Response<Vec<u8>>> for ClientVersionResponse {
-    type Error = MatrixLibError;
-
-    fn try_from(resp: http::Response<Vec<u8>>) -> Result<ClientVersionResponse, Self::Error> {
-        if resp.status() == http::StatusCode::OK {
-            Ok(serde_json::from_slice(resp.body())?)
-        } else {
-            Err(MatrixLibError::Http(resp))
-        }
-    }
-}
-
-
-#[derive(Serialize)]
-pub struct IdentityStatusRequest;
-
-impl Into<http::Request<Vec<u8>>> for IdentityStatusRequest {
-    fn into(self) -> http::Request<Vec<u8>> {
-        let mut http_request = http::Request::new(vec![]);
-        *http_request.method_mut() = http::Method::GET;
-        *http_request.uri_mut() = http::Uri::from_static("/_matrix/identity/api/v1");
-        http_request
-    }
-}
-
-impl Endpoint for IdentityStatusRequest {
-    type Response = IdentityStatusResponse;
-    const REQUIRES_AUTHENTICATION: bool = false;
-}
-
-
-#[derive(Deserialize, Debug)]
-pub struct IdentityStatusResponse;
-
-
-impl TryFrom<http::Response<Vec<u8>>> for IdentityStatusResponse {
-    type Error = MatrixLibError;
-
-    fn try_from(resp: http::Response<Vec<u8>>) -> Result<IdentityStatusResponse, Self::Error> {
-        if resp.status() == http::StatusCode::OK {
-            Ok(IdentityStatusResponse)
-        } else {
-            Err(MatrixLibError::Http(resp))
-        }
-    }
-}
-
-
-
-#[derive(Serialize, Debug)]
-pub struct PurgeRoomRequest {
-    pub room_id: String,
-}
-
-impl Into<http::Request<Vec<u8>>> for PurgeRoomRequest {
-    fn into(self) -> http::Request<Vec<u8>> {
-        let body = serde_json::to_vec(&self).unwrap();
-        let mut http_request = http::Request::new(body);
-        *http_request.uri_mut() = http::Uri::from_static("/_synapse/admin/v1/purge_room");
-        *http_request.method_mut() = http::Method::POST;
-        http_request
-    }
-}
-
-
-#[derive(Deserialize, Debug)]
-pub struct PurgeRoomResponse {
-}
-
-impl TryFrom<http::Response<Vec<u8>>> for PurgeRoomResponse {
-    type Error = MatrixLibError;
-
-    fn try_from(resp: http::Response<Vec<u8>>) -> Result<PurgeRoomResponse, Self::Error> {
-        if resp.status() == http::StatusCode::OK {
-            Ok(serde_json::from_slice(resp.body())?)
-        } else {
-            Err(MatrixLibError::Http(resp))
-        }
-    }
-}
-
-impl Endpoint for PurgeRoomRequest {
-    type Response = PurgeRoomResponse;
-    const REQUIRES_AUTHENTICATION: bool = true;
-}
-
-
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Threepid {
-    pub medium: String,
+    pub medium: ruma::thirdparty::Medium,
     pub address: String,
 }
 
-#[derive(Serialize, Debug)]
-pub struct CreateModifyAccountRequest {
-    // part of url
-    #[serde(skip_serializing)]
-    pub user_id: String,
 
-    // TODO: password should also be optional for modify user account,
-    // but that's not written in the docs. Don't care for now, I mainly want to create users.
-    // -> it is, and especially when changing passwords, it has the "all device logout" semantics
-    pub password: String,
+pub mod version {
+    use ruma::api::ruma_api;
 
-    // NOTE: Server explodes if attributes are not omitted but specified as null, like the default
-    // Serde case.
+    ruma_api! {
+        metadata: {
+            description: "version endpoint",
+            method: GET,
+            name: "version",
+            path: "/_synapse/admin/v1/server_version",
+            rate_limited: false,
+            requires_authentication: false,
+        }
 
-    // defaults to user_id, or the current value if user already exists
-    #[serde(skip_serializing_if="Option::is_none")]
-    pub displayname: Option<String>,
-    // defaults to empty, or the current value if user already exists
-    #[serde(skip_serializing_if="Option::is_none")]
-    pub threepids: Option<Vec<Threepid>>,
-    #[serde(skip_serializing_if="Option::is_none")]
-    pub avatar_url: Option<String>,
-    // defaults to false, or the current value if user already exists
-    #[serde(skip_serializing_if="Option::is_none")]
-    pub admin: Option<bool>,
-    // defaults to false, or the current value if user already exists
-    #[serde(skip_serializing_if="Option::is_none")]
-    pub deactivated: Option<bool>,
-}
+        request: {}
 
-impl Into<http::Request<Vec<u8>>> for CreateModifyAccountRequest {
-    fn into(self) -> http::Request<Vec<u8>> {
-        // TODO: can this go wrong, with a valid request? Then this would need to be try_into as well
-        let body = serde_json::to_vec(&self).unwrap();
-        println!("{:?}", body);
-        let mut http_request = http::Request::new(body);
-        *http_request.method_mut() = http::Method::PUT;
-        *http_request.uri_mut() = format!("/_synapse/admin/v2/users/{}", self.user_id).parse().unwrap();
-        http_request
+        response: {
+            pub server_version: String,
+            pub python_version: String,
+        }
+
+        // TODO: What kind of error is needed here?
+        // This is probably not a general matrix status error with json body, however, some http
+        // error code is highly likely and a semantical result of “no valid identity server here”
     }
 }
 
-impl Endpoint for CreateModifyAccountRequest {
-    type Response = CreateModifyAccountResponse;
-    const REQUIRES_AUTHENTICATION: bool = true;
+// TODO: isn't this covered by ruma's identity-service-api?
+// -> not yet, as that crate is still empty, could send a PR
+// also: might send a PR to matrix-spec first to switch to the /_matrix/identity/v2 endpoint for identity service autodiscovery
+pub mod identity_status {
+    use ruma::api::ruma_api;
+
+    ruma_api! {
+        metadata: {
+            description: "identity status endpoint",
+            method: GET,
+            name: "version",
+            path: "/_matrix/identity/api/v1",
+            rate_limited: false,
+            requires_authentication: false,
+        }
+
+        request: {}
+
+        response: {}
+
+        // TODO: What kind of error is needed here?
+        // This is probably not a general matrix status error with json body, however, some http
+        // error code is highly likely and a semantical result of “no valid identity server here”
+    }
 }
 
-#[derive(Deserialize, Debug)]
-pub struct CreateModifyAccountResponse {
+/// https://github.com/matrix-org/synapse/blob/master/docs/admin_api/rooms.md#list-room-api
+pub mod list_rooms {
+    use ruma::api::ruma_api;
+    use serde::{Serialize, Deserialize};
+
+    #[derive(Serialize, Deserialize, Clone, Debug)]
+    pub struct RoomDetails {
+        pub room_id: ruma::RoomId,
+        pub name: Option<String>,
+        pub canonical_alias: Option<ruma::RoomAliasId>,
+        pub joined_members: js_int::UInt,
+        pub joined_local_members: js_int::UInt,
+        pub version: String,
+        #[serde(deserialize_with = "ruma::serde::empty_string_as_none")]
+        pub creator: Option<ruma::UserId>,
+        pub encryption: Option<String>,
+        pub federatable: bool,
+        pub public: bool,
+        // TODO: make enum
+        pub join_rules: Option<String>,
+        // TODO: make enum
+        pub guest_access: Option<String>,
+        // TODO: make enum
+        pub history_visibility: Option<String>,
+        pub state_events: js_int::UInt,
+    }
+
+    ruma_api! {
+        metadata: {
+            description: "list rooms endpoint",
+            method: GET,
+            name: "list_rooms",
+            path: "/_synapse/admin/v1/rooms",
+            rate_limited: false,
+            requires_authentication: true,
+        }
+
+        request: {
+            /// Offset in the returned list. Defaults to 0.
+            #[serde(skip_serializing_if="Option::is_none")]
+            #[ruma_api(query)]
+            pub from: Option<js_int::UInt>,
+            /// Maximum amount of rooms to return. Defaults to 100.
+            #[serde(skip_serializing_if="Option::is_none")]
+            #[ruma_api(query)]
+            pub limit: Option<js_int::UInt>,
+            // TODO: enum
+            #[serde(skip_serializing_if="Option::is_none")]
+            #[ruma_api(query)]
+            pub order_by: Option<String>,
+            // TODO: enum
+            #[serde(skip_serializing_if="Option::is_none")]
+            #[ruma_api(query)]
+            pub dir: Option<String>,
+            /// Filter rooms by their room name. Search term can be contained in any part of the room name. Defaults to no filtering.
+            // TODO: enum
+            #[serde(skip_serializing_if="Option::is_none")]
+            #[ruma_api(query)]
+            pub search_term: Option<String>,
+        }
+
+        response: {
+            pub rooms: Vec<RoomDetails>,
+            pub offset: js_int::UInt,
+            pub total_rooms: js_int::UInt,
+            pub next_batch: Option<js_int::UInt>,
+            pub prev_batch: Option<js_int::UInt>,
+        }
+
+        error: ruma::api::client::Error
+    }
+
+}
+
+/// https://github.com/matrix-org/synapse/blob/master/docs/admin_api/user_admin_api.rst#query-user-account
+pub mod query_user {
+    use ruma::api::ruma_api;
+
+    ruma_api! {
+        metadata: {
+            description: "query user endpoint",
+            method: GET,
+            name: "query_user",
+            path: "/_synapse/admin/v2/users/:user_id",
+            rate_limited: false,
+            requires_authentication: true,
+        }
+
+        request: {
+            #[ruma_api(path)]
+            pub user_id: ruma::UserId,
+        }
+
+        response: {
+            pub displayname: Option<String>,
+            pub threepids: Option<Vec<super::Threepid>>,
+            pub avatar_url: Option<String>,
+            // TODO: this is returned as int, while the doc shows a bool
+            // I could convert, or investigate further whether there are other values, or fix it upstream
+            pub admin: js_int::UInt,
+            // TODO: this is returned as int, while the doc shows a bool
+            // I could convert, or investigate further whether there are other values, or fix it upstream
+            pub deactivated: js_int::UInt,
+        }
+
+        error: ruma::api::client::Error
+    }
+}
+
+/// https://github.com/matrix-org/synapse/blob/master/docs/admin_api/purge_room.md
+pub mod purge_room {
+    use ruma::api::ruma_api;
+
+    ruma_api! {
+        metadata: {
+            description: "purge room endpoint",
+            method: POST,
+            name: "purge_room",
+            path: "/_synapse/admin/v1/purge_room",
+            rate_limited: false,
+            requires_authentication: true,
+        }
+
+        request: {
+            pub room_id: ruma::RoomId,
+        }
+
+        response: {}
+
+        error: ruma::api::client::Error
+    }
 }
 
 
-impl TryFrom<http::Response<Vec<u8>>> for CreateModifyAccountResponse {
-    type Error = MatrixLibError;
 
-    fn try_from(resp: http::Response<Vec<u8>>) -> Result<CreateModifyAccountResponse, Self::Error> {
+/// https://github.com/matrix-org/synapse/blob/master/docs/admin_api/user_admin_api.rst#create-or-modify-account
+pub mod create_modify_account {
+    use ruma::api::ruma_api;
+
+    ruma_api! {
+        metadata: {
+            description: "create or modify account endpoint",
+            method: PUT,
+            name: "create_modify_account",
+            path: "/_synapse/admin/v2/users/:user_id",
+            rate_limited: false,
+            requires_authentication: true,
+        }
+
+        request: {
+            #[ruma_api(path)]
+            pub user_id: ruma::UserId,
+
+            // TODO: password should also be optional for modify user account,
+            // but that's not written in the docs. Don't care for now, I mainly want to create users.
+            // -> it is, and especially when changing passwords, it has the "all device logout" semantics
+            pub password: String,
+
+            // NOTE: Server explodes if attributes are not omitted but specified as null, like the default
+            // Serde case.
+
+            // defaults to user_id, or the current value if user already exists
+            // Some("") is treated as setting it to null.
+            #[serde(skip_serializing_if="Option::is_none")]
+            pub displayname: Option<String>,
+            // defaults to empty, or the current value if user already exists
+            #[serde(skip_serializing_if="Option::is_none")]
+            pub threepids: Option<Vec<super::Threepid>>,
+            #[serde(skip_serializing_if="Option::is_none")]
+            pub avatar_url: Option<String>,
+            // defaults to false, or the current value if user already exists
+            #[serde(skip_serializing_if="Option::is_none")]
+            pub admin: Option<bool>,
+            // defaults to false, or the current value if user already exists
+            #[serde(skip_serializing_if="Option::is_none")]
+            pub deactivated: Option<bool>,
+
+        }
+
+        // TODO: this response reverse-engineered and not documented, should all of those be required?
+        response: {
+            pub name: ruma::UserId,
+            pub password_hash: String,
+            // TODO: this is not returned as bool…?
+            pub is_guest: js_int::UInt,
+            // TODO: this is not returned as bool…?
+            pub admin: js_int::UInt,
+            // TODO: not sure if this should be Option<js::UInt>
+            // this is present but can be null, therefore optional
+            pub consent_version: Option<String>,
+            // TODO: not sure if this should be Option<js::UInt> or whatever
+            // this is present but can be null, therefore optional
+            pub consent_server_notice_sent: Option<String>,
+            // TODO: not sure if this should be Option<js::UInt>
+            // this is present but can be null, therefore optional
+            pub appservice_id: Option<String>,
+            pub creation_ts: js_int::UInt,
+            // this is present but can be null, therefore optional
+            pub user_type: Option<String>,
+            // TODO: this is not returned as bool…?
+            pub deactivated: js_int::UInt,
+            pub displayname: Option<String>,
+            // this is present but can be null, therefore optional
+            pub avatar_url: Option<String>,
+            pub threepids: Option<Vec<super::Threepid>>,
+            // TODO: das hier sind Extrafelder bei der Threepid nebendran
+            // pub validated_at: js_int::UInt,
+            // pub added_at: js_int::UInt,
+        }
+
+        error: ruma::api::client::Error
+
         // TODO: returns 200 if account-exist-and-was-updated,
         // but 201 CREATED if a new account was created.
-        if resp.status() == http::StatusCode::OK {
-            Ok(serde_json::from_slice(resp.body())?)
-        } else {
-            Err(MatrixLibError::Http(resp))
+        // However, ruma does throw away this information.
+
+        // TODO: Was genau hat es mit den EndpointErrors auf sich?
+        // -> Ich kann da custom code mitgeben, der die Conversion von http::Response in einen in ruma
+        // error eingepackten Fehlertyp baut
+        // Ich brauch den error allein schon deswegen mindestens bei allen authentifizierten
+        // Requests, weil ein ungültiger Login eben solch ein Error im Matrix-Standardformat ist.
+        // TODO: Müsste ich hier wo auch nen tatsächlichen Error eintragen wie ruma client api
+        // error, oder reicht hier überall der Void-Default?
+        // TODO: ruma api serialisiert als Ok wenn status code < 400, sonst als error. Das halte ich
+        // für nicht unfragwürdig, da auch den 300-Umleitungsblock mitzunehmen und zwischen z.B. 200 Ok
+        // und 201 Created nicht zu unterscheiden.
+    }
+}
+
+
+/// https://github.com/matrix-org/synapse/blob/master/docs/admin_api/user_admin_api.rst#reset-password
+pub mod reset_password {
+    use ruma::api::ruma_api;
+
+    ruma_api! {
+        metadata: {
+            description: "password reset endpoint",
+            method: POST,
+            name: "reset_password",
+            path: "/_synapse/admin/v1/reset_password/:user_id",
+            rate_limited: false,
+            requires_authentication: true,
         }
-    }
-}
 
+        request: {
+            #[ruma_api(path)]
+            pub user_id: ruma::UserId,
 
-#[derive(Serialize)]
-pub struct PasswordResetRequest {
-    // part of url
-    #[serde(skip_serializing)]
-    pub user_id: String,
-
-    pub new_password: String,
-    // whether to invalidate all access tokens, i.e. whether the password was just forgotten
-    // or whether the password got compromised potentially.
-    // defaults to true if not set
-    #[serde(skip_serializing_if="Option::is_none")]
-    pub logout_devices: Option<bool>,
-}
-
-impl Into<http::Request<Vec<u8>>> for PasswordResetRequest {
-    fn into(self) -> http::Request<Vec<u8>> {
-        let body = serde_json::to_vec(&self).unwrap();
-        let mut http_request = http::Request::new(body);
-        *http_request.uri_mut() = http::Uri::from_static("/_matrix/client/r0/login");
-        *http_request.uri_mut() = format!("/_synapse/admin/v1/reset_password/{}", self.user_id).parse().unwrap();
-        *http_request.method_mut() = http::Method::GET;
-        http_request
-    }
-}
-
-impl Endpoint for PasswordResetRequest {
-    type Response = PasswordResetResponse;
-    const REQUIRES_AUTHENTICATION: bool = true;
-}
-
-
-#[derive(Deserialize, Debug)]
-pub struct PasswordResetResponse {
-}
-
-
-impl TryFrom<http::Response<Vec<u8>>> for PasswordResetResponse {
-    type Error = MatrixLibError;
-
-    fn try_from(resp: http::Response<Vec<u8>>) -> Result<PasswordResetResponse, Self::Error> {
-        if resp.status() == http::StatusCode::OK {
-            Ok(serde_json::from_slice(resp.body())?)
-        } else {
-            Err(MatrixLibError::Http(resp))
+            pub new_password: String,
+            // whether to invalidate all access tokens, i.e. whether the password was just forgotten
+            // or whether the password got compromised potentially.
+            // defaults to true if not set
+            #[serde(skip_serializing_if="Option::is_none")]
+            pub logout_devices: Option<bool>,
         }
+
+        response: {}
+
+        error: ruma::api::client::Error
     }
 }
 
-#[derive(Serialize, Debug)]
-pub struct IsAdminRequest {
-    // TODO: *this* requires not only localpart, but full matrix id
-    pub user_id: String,
-}
 
-impl Endpoint for IsAdminRequest {
-    type Response = IsAdminResponse;
-    const REQUIRES_AUTHENTICATION: bool = true;
-}
+/// https://github.com/matrix-org/synapse/blob/master/docs/admin_api/user_admin_api.rst
+pub mod user_is_admin {
+    use ruma::api::ruma_api;
 
-impl Into<http::Request<Vec<u8>>> for IsAdminRequest {
-    fn into(self) -> http::Request<Vec<u8>> {
-        let mut http_request = http::Request::new(vec![]);
-        *http_request.method_mut() = http::Method::GET;
-        *http_request.uri_mut() = format!("/_synapse/admin/v1/users/{}/admin", self.user_id).parse().unwrap();
-        http_request
-    }
-}
-
-#[derive(Deserialize, Debug)]
-pub struct IsAdminResponse {
-    admin: bool,
-}
-
-impl TryFrom<http::Response<Vec<u8>>> for IsAdminResponse {
-    type Error = MatrixLibError;
-
-    fn try_from(resp: http::Response<Vec<u8>>) -> Result<IsAdminResponse, Self::Error> {
-        if resp.status() == http::StatusCode::OK {
-            Ok(serde_json::from_slice(resp.body())?)
-        } else {
-            Err(MatrixLibError::Http(resp))
+    ruma_api! {
+        metadata: {
+            description: "is admin endpoint",
+            method: GET,
+            name: "user_is_admin",
+            path: "/_synapse/admin/v1/users/:user_id/admin",
+            rate_limited: false,
+            requires_authentication: true,
         }
-    }
-}
 
-#[derive(Debug)]
-pub struct DiscoveryRequest;
-
-impl Endpoint for DiscoveryRequest {
-    type Response = DiscoveryResponse;
-    const REQUIRES_AUTHENTICATION: bool = false;
-}
-
-impl Into<http::Request<Vec<u8>>> for DiscoveryRequest {
-    fn into(self) -> http::Request<Vec<u8>> {
-        let mut http_request = http::Request::new(vec![]);
-        *http_request.method_mut() = http::Method::GET;
-        *http_request.uri_mut() = http::Uri::from_static("/.well-known/matrix/client");
-        http_request
-    }
-}
-
-pub enum DiscoveryResponse {
-    Some(DiscoveryInfo),
-    None,
-}
-
-impl TryFrom<http::Response<Vec<u8>>> for DiscoveryResponse {
-    type Error = MatrixLibError;
-
-    fn try_from(resp: http::Response<Vec<u8>>) -> Result<DiscoveryResponse, Self::Error> {
-        match resp.status() {
-            http::StatusCode::OK => Ok(DiscoveryResponse::Some(serde_json::from_slice(resp.body())?)),
-            http::StatusCode::NOT_FOUND => Ok(DiscoveryResponse::None),
-            _ => Err(MatrixLibError::Http(resp)),
+        request: {
+            #[ruma_api(path)]
+            pub user_id: ruma::UserId,
         }
+
+        response: {
+            pub admin: bool,
+        }
+
+        error: ruma::api::client::Error
     }
 }

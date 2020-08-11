@@ -22,3 +22,13 @@ structopt = "0.3"
 smol = { version = "0.1", features = ["tokio02"] }
 async-trait = "0.1"
 # surf = "1"
+# TODO: move to ruma monorepo with features, now that ruma::ruma_api! is a thing: https://github.com/ruma/ruma/issues/123
+ruma = { path = "../ruma/ruma", features = ["client-api"] }
+# ruma-api = "0.17.0-alpha.1"
+# ruma-api = { path = "../ruma/ruma-api" }
+# # ruma-identifiers = "0.17.1"
+# ruma-identifiers = { path = "../ruma/ruma-identifiers" }
+# # ruma-client-api = "0.10.0-alpha.1"
+# ruma-client-api = { path = "../ruma/ruma-client-api" }
+# ruma-common = { path = "../ruma/ruma-common" }
+js_int = "0.1"

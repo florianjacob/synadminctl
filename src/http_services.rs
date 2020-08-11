@@ -100,6 +100,8 @@ impl Service<http::Request<Vec<u8>>> for ReqwestService {
         let body = reqwest_response.bytes().await?;
         *http_response.body_mut() = body.to_vec();
 
+        println!("received http response: {:?}", http_response);
+        println!("decoded body: {:?}", std::str::from_utf8(http_response.body()).unwrap());
         Ok(http_response)
     }
 }
