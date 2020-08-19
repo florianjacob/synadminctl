@@ -18,7 +18,8 @@ pub trait Service<Request> {
     type Response;
     type Error;
 
-    async fn call(&self, _: Request) -> Result<Self::Response, Self::Error>;
+    async fn call(&self, _: Request) -> Result<Self::Response, Self::Error>
+        where Request: 'async_trait;
 }
 
 
@@ -67,13 +68,16 @@ where
 #[async_trait]
 impl<Request, S> Service<Request> for AnonymousMatrixService<S>
 where
-    Request: ruma::api::OutgoingRequest + ruma::api::OutgoingNonAuthRequest + Send + 'static,
+    Request: ruma::api::OutgoingRequest + ruma::api::OutgoingNonAuthRequest + Send,
+    <Request as ruma::api::OutgoingRequest>::EndpointError: 'static,
     S: Service<http::Request<Vec<u8>>, Response=http::Response<Vec<u8>>, Error=anyhow::Error> + Send + Sync,
 {
     type Response = Request::IncomingResponse;
     type Error = MatrixLibError<Request::EndpointError>;
 
-    async fn call(&self, request: Request) -> Result<Self::Response, Self::Error> {
+    async fn call(&self, request: Request) -> Result<Self::Response, Self::Error>
+        where Request: 'async_trait
+    {
         let http_request: http::Request<Vec<u8>> = {
             let inner = self.inner.clone();
             request.try_into_http_request(&inner.deref().base_url, None)?
@@ -127,13 +131,16 @@ where
 #[async_trait]
 impl<Request, S> Service<Request> for MatrixService<S>
 where
-    Request: ruma::api::OutgoingRequest + Send + 'static,
+    Request: ruma::api::OutgoingRequest + Send,
+    <Request as ruma::api::OutgoingRequest>::EndpointError: 'static,
     S: Service<http::Request<Vec<u8>>, Response=http::Response<Vec<u8>>, Error=anyhow::Error> + Send + Sync,
 {
     type Response = Request::IncomingResponse;
     type Error = MatrixLibError<Request::EndpointError>;
 
-    async fn call(&self, request: Request) -> Result<Self::Response, Self::Error> {
+    async fn call(&self, request: Request) -> Result<Self::Response, Self::Error>
+        where Request: 'async_trait
+    {
         let http_request: http::Request<Vec<u8>> = {
             let inner = self.inner.clone();
             request.try_into_http_request(&inner.deref().base_url, Some(&inner.deref().access_token))?
@@ -194,7 +201,7 @@ pub async fn server_discovery<S>(http_service: S, user_id: String) -> Result<rum
 
     // 3. Make a GET request to https://hostname/.well-known/matrix/client.
     // 3c. Parse the response body as a JSON object
-    let discovery_response = service.call(ruma::api::client::unversioned::discover_homeserver::Request).await;
+    let discovery_response = service.call(ruma::api::client::unversioned::discover_homeserver::Request::new()).await;
 
     let discovery_info = match discovery_response {
         // error on serializing into http request
@@ -262,7 +269,7 @@ pub async fn server_discovery<S>(http_service: S, user_id: String) -> Result<rum
     //     If any step in the validation fails, then FAIL_ERROR.
     //     Validation is done as a simple check against configuration errors,
     //     in order to ensure that the discovered address points to a valid homeserver.
-    let _ = service.call(ruma::api::client::unversioned::get_supported_versions::Request).await
+    let _ = service.call(ruma::api::client::unversioned::get_supported_versions::Request::new()).await
         .map_err(|error| AutoDiscoveryError::FailError(format!("{}", error)))?;
 
 
