@@ -1,7 +1,10 @@
 { pkgs ? import <nixpkgs> {}, unstable ? import <nixos-unstable> {} }:
 pkgs.mkShell {
   buildInputs = [
-    (pkgs.rustChannelOf { channel = "stable";}).rust
+    ((pkgs.rustChannelOf { channel = "stable"; }).rust.override {
+      extensions = [ "clippy-preview" ];
+    })
+    pkgs.cargo-outdated
     pkgs.openssl
     pkgs.pkgconfig
     pkgs.gcc

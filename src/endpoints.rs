@@ -239,6 +239,7 @@ pub mod create_modify_account {
         }
 
         // TODO: this response reverse-engineered and not documented, should all of those be required?
+        // Alternative: https://serde.rs/attr-flatten.html
         response: {
             pub name: ruma::UserId,
             pub password_hash: String,
