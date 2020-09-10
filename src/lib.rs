@@ -1,4 +1,4 @@
-#[warn(rust_2018_idioms, missing_debug_implementations)]
+#![warn(rust_2018_idioms, missing_debug_implementations)]
 
 use std::convert::TryInto;
 use thiserror::Error;

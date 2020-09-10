@@ -1,4 +1,4 @@
-#[warn(rust_2018_idioms, missing_debug_implementations)]
+#![warn(rust_2018_idioms, missing_debug_implementations)]
 
 use std::io::Write;
 use synadminctl::{Session, Service};
