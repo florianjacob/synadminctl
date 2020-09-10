@@ -74,7 +74,7 @@ use crate::Service;
 // }
 
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ReqwestService {
     client: reqwest::Client,
 }

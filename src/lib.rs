@@ -42,11 +42,12 @@ pub enum MatrixLibError<E: std::error::Error + 'static> {
     HttpService(#[from] anyhow::Error),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AnonymousMatrixService<S> {
     inner: Arc<InnerAnonymousMatrixService<S>>,
 }
 
+#[derive(Debug)]
 struct InnerAnonymousMatrixService<S> {
     http_service: S,
     base_url: String,
@@ -105,10 +106,11 @@ pub struct Session {
     pub device_id: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MatrixService<S> {
     inner: Arc<InnerMatrixService<S>>,
 }
+#[derive(Debug)]
 struct InnerMatrixService<S> {
     http_service: S,
     base_url: String,
