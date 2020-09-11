@@ -34,8 +34,9 @@ pub mod version {
 }
 
 // TODO: isn't this covered by ruma's identity-service-api?
-// -> not yet, as that crate is still empty, could send a PR
+// -> not yet, as that crate is still empty, could send a PR. Is there a deprecation flag for the metadata?
 // also: might send a PR to matrix-spec first to switch to the /_matrix/identity/v2 endpoint for identity service autodiscovery
+// That MSC already exists: https://github.com/matrix-org/matrix-doc/pull/2499
 pub mod identity_status {
     use ruma::api::ruma_api;
 
