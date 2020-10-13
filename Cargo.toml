@@ -32,3 +32,4 @@ ruma = { path = "../ruma/ruma", features = ["client-api"] }
 # ruma-client-api = { path = "../ruma/ruma-client-api" }
 # ruma-common = { path = "../ruma/ruma-common" }
 js_int = "0.1"
+assign = "1"

@@ -17,7 +17,7 @@ pub mod version {
             name: "version",
             path: "/_synapse/admin/v1/server_version",
             rate_limited: false,
-            requires_authentication: false,
+            authentication: None,
         }
 
         request: {}
@@ -30,6 +30,12 @@ pub mod version {
         // TODO: What kind of error is needed here?
         // This is probably not a general matrix status error with json body, however, some http
         // error code is highly likely and a semantical result of “no valid identity server here”
+    }
+
+    impl Request {
+        pub fn new() -> Self {
+            Self { }
+        }
     }
 }
 
@@ -47,7 +53,7 @@ pub mod identity_status {
             name: "version",
             path: "/_matrix/identity/api/v1",
             rate_limited: false,
-            requires_authentication: false,
+            authentication: None,
         }
 
         request: {}
@@ -89,9 +95,10 @@ pub mod list_accounts {
             name: "list_accounts",
             path: "/_synapse/admin/v2/users",
             rate_limited: false,
-            requires_authentication: true,
+            authentication: AccessToken,
         }
 
+        #[derive(Default)]
         request: {
             /// TODO: this should be treated as opaque, i.e. a newtype, so that only values returned from responses can be used here
             /// Offset in the returned list. Defaults to 0.
@@ -131,6 +138,12 @@ pub mod list_accounts {
         error: ruma::api::client::Error
     }
 
+    impl Request {
+        pub fn new() -> Self {
+            Default::default()
+        }
+    }
+
 }
 
 /// https://github.com/matrix-org/synapse/blob/master/docs/admin_api/rooms.md#list-room-api
@@ -167,9 +180,10 @@ pub mod list_rooms {
             name: "list_rooms",
             path: "/_synapse/admin/v1/rooms",
             rate_limited: false,
-            requires_authentication: true,
+            authentication: AccessToken,
         }
 
+        #[derive(Default)]
         request: {
             /// Offset in the returned list. Defaults to 0.
             #[serde(skip_serializing_if="Option::is_none")]
@@ -205,6 +219,12 @@ pub mod list_rooms {
         error: ruma::api::client::Error
     }
 
+    impl Request {
+        pub fn new() -> Self {
+            Default::default()
+        }
+    }
+
 }
 
 /// https://github.com/matrix-org/synapse/blob/master/docs/admin_api/user_admin_api.rst#query-user-account
@@ -218,7 +238,7 @@ pub mod query_user {
             name: "query_user",
             path: "/_synapse/admin/v2/users/:user_id",
             rate_limited: false,
-            requires_authentication: true,
+            authentication: AccessToken,
         }
 
         request: {
@@ -240,6 +260,47 @@ pub mod query_user {
 
         error: ruma::api::client::Error
     }
+
+    impl Request {
+        pub fn new(user_id: ruma::UserId) -> Self {
+            Self { user_id }
+        }
+    }
+}
+
+/// https://github.com/matrix-org/synapse/blob/master/docs/admin_api/user_admin_api.rst#list-room-memberships-of-an-user
+pub mod list_joined_rooms {
+    use ruma::api::ruma_api;
+
+    ruma_api! {
+        metadata: {
+            description: "list room memberships of a user",
+            method: GET,
+            name: "query_user",
+            path: "/_synapse/admin/v1/users/:user_id/joined_rooms",
+            rate_limited: false,
+            authentication: AccessToken,
+        }
+
+        request: {
+            #[ruma_api(path)]
+            pub user_id: ruma::UserId,
+        }
+
+        response: {
+            pub joined_rooms: Vec<ruma::RoomId>,
+            /// number of rooms
+            pub total: js_int::UInt,
+        }
+
+        error: ruma::api::client::Error
+    }
+
+    impl Request {
+        pub fn new(user_id: ruma::UserId) -> Self {
+            Self { user_id }
+        }
+    }
 }
 
 /// https://github.com/matrix-org/synapse/blob/master/docs/admin_api/purge_room.md
@@ -253,7 +314,7 @@ pub mod purge_room {
             name: "purge_room",
             path: "/_synapse/admin/v1/purge_room",
             rate_limited: false,
-            requires_authentication: true,
+            authentication: AccessToken,
         }
 
         request: {
@@ -263,6 +324,12 @@ pub mod purge_room {
         response: {}
 
         error: ruma::api::client::Error
+    }
+
+    impl Request {
+        pub fn new(room_id: ruma::RoomId) -> Self {
+            Self { room_id }
+        }
     }
 }
 
@@ -279,7 +346,7 @@ pub mod create_modify_account {
             name: "create_modify_account",
             path: "/_synapse/admin/v2/users/:user_id",
             rate_limited: false,
-            requires_authentication: true,
+            authentication: AccessToken,
         }
 
         request: {
@@ -361,6 +428,20 @@ pub mod create_modify_account {
         // für nicht unfragwürdig, da auch den 300-Umleitungsblock mitzunehmen und zwischen z.B. 200 Ok
         // und 201 Created nicht zu unterscheiden.
     }
+
+    impl Request {
+        pub fn new(user_id: ruma::UserId, password: String) -> Self {
+            Self {
+                user_id,
+                password,
+                displayname: None,
+                threepids: None,
+                avatar_url: None,
+                admin: None,
+                deactivated: None,
+            }
+        }
+    }
 }
 
 
@@ -375,7 +456,7 @@ pub mod reset_password {
             name: "reset_password",
             path: "/_synapse/admin/v1/reset_password/:user_id",
             rate_limited: false,
-            requires_authentication: true,
+            authentication: AccessToken,
         }
 
         request: {
@@ -394,6 +475,12 @@ pub mod reset_password {
 
         error: ruma::api::client::Error
     }
+
+    impl Request {
+        pub fn new(user_id: ruma::UserId, new_password: String, logout_devices: Option<bool>) -> Self {
+            Self { user_id, new_password, logout_devices }
+        }
+    }
 }
 
 
@@ -408,7 +495,7 @@ pub mod user_is_admin {
             name: "user_is_admin",
             path: "/_synapse/admin/v1/users/:user_id/admin",
             rate_limited: false,
-            requires_authentication: true,
+            authentication: AccessToken,
         }
 
         request: {
@@ -421,5 +508,11 @@ pub mod user_is_admin {
         }
 
         error: ruma::api::client::Error
+    }
+
+    impl Request {
+        pub fn new(user_id: ruma::UserId) -> Self {
+            Self { user_id }
+        }
     }
 }

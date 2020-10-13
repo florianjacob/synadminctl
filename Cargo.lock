@@ -611,6 +611,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "maplit"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
+
+[[package]]
 name = "match_cfg"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1018,6 +1024,8 @@ dependencies = [
 name = "ruma"
 version = "0.0.1"
 dependencies = [
+ "assign",
+ "js_int",
  "ruma-api",
  "ruma-client-api",
  "ruma-common",
@@ -1033,11 +1041,13 @@ dependencies = [
  "http",
  "percent-encoding",
  "ruma-api-macros",
+ "ruma-common",
  "ruma-identifiers",
  "ruma-serde",
  "serde",
  "serde_json",
  "strum",
+ "thiserror",
 ]
 
 [[package]]
@@ -1057,6 +1067,7 @@ dependencies = [
  "assign",
  "http",
  "js_int",
+ "maplit",
  "percent-encoding",
  "ruma-api",
  "ruma-common",
@@ -1073,12 +1084,22 @@ name = "ruma-common"
 version = "0.2.0"
 dependencies = [
  "js_int",
- "ruma-api",
+ "ruma-common-macros",
  "ruma-identifiers",
  "ruma-serde",
  "serde",
  "serde_json",
  "strum",
+]
+
+[[package]]
+name = "ruma-common-macros"
+version = "0.2.0"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -1334,6 +1355,7 @@ name = "synadminctl"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "assign",
  "async-trait",
  "futures",
  "hostname",

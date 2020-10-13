@@ -1,5 +1,7 @@
 #![warn(rust_2018_idioms, missing_debug_implementations)]
 
+use assign::assign;
+
 use std::io::Write;
 use synadminctl::{Session, Service};
 use structopt::StructOpt;
@@ -44,6 +46,10 @@ enum Opt {
         user_id: String,
     },
     QueryUser {
+        #[structopt(long)]
+        user_id: String,
+    },
+    ListJoinedRooms {
         #[structopt(long)]
         user_id: String,
     },
@@ -145,23 +151,32 @@ fn main() -> anyhow::Result<()> {
 
         let result = match opt {
             Opt::Version => {
-                let request = synadminctl::version::Request;
+                let request = synadminctl::version::Request::new();
                 let response = service.call(request).await?;
                 println!("{:?}", response);
                 Ok(())
             },
             Opt::IsAdmin { user_id } => {
-                let request = synadminctl::user_is_admin::Request {
-                    user_id: user_id.try_into()?,
-                };
+                let request = synadminctl::user_is_admin::Request::new(
+                    user_id.try_into()?,
+                );
                 let response = service.call(request).await?;
                 println!("{:?}", response);
                 Ok(())
             },
             Opt::QueryUser { user_id } => {
-                let request = synadminctl::query_user::Request {
-                    user_id: user_id.try_into()?,
-                };
+                let request = synadminctl::query_user::Request::new(
+                    user_id.try_into()?,
+                );
+                println!("{:?}", request);
+                let response = service.call(request).await?;
+                println!("{:?}", response);
+                Ok(())
+            },
+            Opt::ListJoinedRooms { user_id } => {
+                let request = synadminctl::list_joined_rooms::Request::new(
+                    user_id.try_into()?,
+                );
                 println!("{:?}", request);
                 let response = service.call(request).await?;
                 println!("{:?}", response);
@@ -187,51 +202,38 @@ fn main() -> anyhow::Result<()> {
                     None
                 };
 
-                let request = synadminctl::create_modify_account::Request {
-                    user_id: user_id.try_into()?,
-                    password: password,
+                let request = assign!(synadminctl::create_modify_account::Request::new(user_id.try_into()?, password), {
                     displayname: Some(displayname),
                     threepids,
-                    avatar_url: None,
-                    admin: None,
-                    deactivated: None,
-                };
+                });
                 println!("{:?}", request);
                 let response = service.call(request).await?;
                 println!("{:?}", response);
                 Ok(())
             },
             Opt::ListAccounts { from, limit } => {
-                let request = synadminctl::list_accounts::Request {
+                let request = assign!(synadminctl::list_accounts::Request::new(), {
                     from,
                     limit,
-                    user_id: None,
-                    name: None,
-                    guests: None,
-                    deactivated: None,
-                };
+                });
                 let response = service.call(request).await?;
                 println!("{:#?}", response);
                 Ok(())
             },
             Opt::ListRooms { from } => {
                 println!("rooms from {}", from);
-                let request = synadminctl::list_rooms::Request {
+                let request = assign!(synadminctl::list_rooms::Request::new(), {
                     from: Some(from),
-                    limit: None,
-                    order_by: None,
-                    dir: None,
-                    search_term: None,
-                };
+                });
                 let response = service.call(request).await?;
                 println!("{:#?}", response);
                 Ok(())
             },
             Opt::PurgeRoom { room_id } => {
                 println!("room purging");
-                let request = synadminctl::purge_room::Request {
-                    room_id: room_id.try_into()?,
-                };
+                let request = synadminctl::purge_room::Request::new(
+                    room_id.try_into()?,
+                );
                 let response = service.call(request).await?;
                 println!("{:?}", response);
                 Ok(())
@@ -241,11 +243,11 @@ fn main() -> anyhow::Result<()> {
                 // TODO: option for random generation
                 let new_password = rpassword::prompt_password_stdout("new password: ").unwrap();
 
-                let request = synadminctl::reset_password::Request {
-                    user_id: user_id.try_into()?,
+                let request = synadminctl::reset_password::Request::new(
+                    user_id.try_into()?,
                     new_password,
-                    logout_devices: Some(logout_devices),
-                };
+                    Some(logout_devices),
+                );
                 let response = service.call(request).await?;
                 println!("{:?}", response);
                 Ok(())
