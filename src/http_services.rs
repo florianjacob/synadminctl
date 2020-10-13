@@ -92,6 +92,7 @@ impl Service<http::Request<Vec<u8>>> for ReqwestService {
     type Error = anyhow::Error;
 
     async fn call(&self, http_request: http::Request<Vec<u8>>) -> Result<http::Response<Vec<u8>>, anyhow::Error> {
+        println!("http request: {:?}", http_request);
         let reqwest_request: reqwest::Request = http_request.try_into()?;
         let reqwest_response = self.client.execute(reqwest_request).await?;
         let mut http_response = http::Response::new(vec![]);

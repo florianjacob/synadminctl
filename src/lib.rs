@@ -34,6 +34,7 @@ pub enum MatrixLibError<E: std::error::Error + 'static> {
     // TODO: this serializes as actual array of ints, should be deserialized into a string somehow
     // #[error("http response had unexpected error")]
     // Http(http::Response<Vec<u8>>),
+    // TODO: das hier ist auch z.B. 504 Gateway Timeout
     #[error("error when parsing http response")]
     FromHttpResponseError(#[from] ruma::api::error::FromHttpResponseError<E>),
     #[error("error when converting to http request")]

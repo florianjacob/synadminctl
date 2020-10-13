@@ -51,6 +51,11 @@ enum Opt {
         #[structopt(long)]
         user_id: String,
     },
+    ListAccounts {
+        from: Option<js_int::UInt>,
+        limit: Option<js_int::UInt>,
+        // TODO: user_id, name, guests, deactivated
+    },
     ListRooms {
         from: js_int::UInt,
     },
@@ -84,6 +89,8 @@ fn main() -> anyhow::Result<()> {
             // could also prompt on stderr, should I?
             let password = unblock!(rpassword::prompt_password_stdout("password: "))?;
 
+            // TODO: in addition, I should do a basic VersionResponse check to see whether the
+            // Admin API is available and configured, i.e. /_synapse might not be available
             let discovery_info = match synadminctl::server_discovery(http_service.clone(), username.clone()).await {
                 Ok(discovery_info) => discovery_info,
                 Err(synadminctl::AutoDiscoveryError::Prompt) => {
@@ -166,19 +173,25 @@ fn main() -> anyhow::Result<()> {
                 let displayname = unblock!(prompt_cleartext("displayname"));
                 let mail_address = unblock!(prompt_cleartext("mail address"));
 
-                // TODO: explodiert wenn die Mailadresse ein leerer String ist
-                // TODO: es gibt 1. setzen auf leer 2. setzen auf bestimmten wert (oder mehrere) 3.
-                // alten Wert so lassen wie er war.
-                let threepids = vec![synadminctl::Threepid {
-                    medium: ruma::thirdparty::Medium::Email,
-                    address: mail_address,
-                }];
+                // TODO: es gibt
+                // 1. setzen auf leer
+                // 2. setzen auf bestimmten wert (oder mehrere)
+                // 3. alten Wert so lassen wie er war.
+                // -> aktuell behandle ich leer als ignorieren
+                let threepids = if mail_address != "" {
+                    Some(vec![synadminctl::Threepid {
+                        medium: ruma::thirdparty::Medium::Email,
+                        address: mail_address,
+                    }])
+                } else {
+                    None
+                };
 
                 let request = synadminctl::create_modify_account::Request {
                     user_id: user_id.try_into()?,
                     password: password,
                     displayname: Some(displayname),
-                    threepids: Some(threepids),
+                    threepids,
                     avatar_url: None,
                     admin: None,
                     deactivated: None,
@@ -186,6 +199,19 @@ fn main() -> anyhow::Result<()> {
                 println!("{:?}", request);
                 let response = service.call(request).await?;
                 println!("{:?}", response);
+                Ok(())
+            },
+            Opt::ListAccounts { from, limit } => {
+                let request = synadminctl::list_accounts::Request {
+                    from,
+                    limit,
+                    user_id: None,
+                    name: None,
+                    guests: None,
+                    deactivated: None,
+                };
+                let response = service.call(request).await?;
+                println!("{:#?}", response);
                 Ok(())
             },
             Opt::ListRooms { from } => {

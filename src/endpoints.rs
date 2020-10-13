@@ -60,6 +60,79 @@ pub mod identity_status {
     }
 }
 
+/// https://github.com/matrix-org/synapse/blob/master/docs/admin_api/user_admin_api.rst#list-accounts
+pub mod list_accounts {
+    use ruma::api::ruma_api;
+    use serde::{Serialize, Deserialize};
+
+    #[derive(Serialize, Deserialize, Clone, Debug)]
+    pub struct UserDetails {
+        pub name: ruma::UserId,
+        // TODO: this isn't named as optional in the spec, but missing from the responses
+        pub password_hash: Option<String>,
+        // TODO: why not bool?
+        pub is_guest: js_int::UInt,
+        // TODO: why not bool?
+        pub admin: js_int::UInt,
+        // TODO: what is this field? It's null in the examples
+        pub user_type: Option<String>,
+        // TODO: why not bool?
+        pub deactivated: js_int::UInt,
+        pub displayname: Option<String>,
+        pub avatar_url: Option<String>,
+    }
+
+    ruma_api! {
+        metadata: {
+            description: "list accounts endpoint",
+            method: GET,
+            name: "list_accounts",
+            path: "/_synapse/admin/v2/users",
+            rate_limited: false,
+            requires_authentication: true,
+        }
+
+        request: {
+            /// TODO: this should be treated as opaque, i.e. a newtype, so that only values returned from responses can be used here
+            /// Offset in the returned list. Defaults to 0.
+            #[serde(skip_serializing_if="Option::is_none")]
+            #[ruma_api(query)]
+            pub from: Option<js_int::UInt>,
+            /// Maximum amount of users to return. Defaults to 100.
+            #[serde(skip_serializing_if="Option::is_none")]
+            #[ruma_api(query)]
+            pub limit: Option<js_int::UInt>,
+            /// user_id is optional and filters to only return users with user IDs that contain this value. This parameter is ignored when using the name parameter.
+            #[serde(skip_serializing_if="Option::is_none")]
+            #[ruma_api(query)]
+            pub user_id: Option<String>,
+            /// name is optional and filters to only return users with user ID localparts or displaynames that contain this value.
+            #[serde(skip_serializing_if="Option::is_none")]
+            #[ruma_api(query)]
+            pub name: Option<String>,
+            /// The parameter guests is optional and if false will exclude guest users. Defaults to true to include guest users.
+            #[serde(skip_serializing_if="Option::is_none")]
+            #[ruma_api(query)]
+            pub guests: Option<bool>,
+            /// The parameter deactivated is optional and if true will include deactivated users. Defaults to false to exclude deactivated users.
+            #[serde(skip_serializing_if="Option::is_none")]
+            #[ruma_api(query)]
+            pub deactivated: Option<bool>,
+        }
+
+        response: {
+            pub users: Vec<UserDetails>,
+            /// To paginate, check for next_token and if present, call the endpoint again with from set to the value of next_token. This will return a new page.
+            /// If the endpoint does not return a next_token then there are no more users to paginate through.
+            pub next_token: Option<String>,
+            pub total: js_int::UInt,
+        }
+
+        error: ruma::api::client::Error
+    }
+
+}
+
 /// https://github.com/matrix-org/synapse/blob/master/docs/admin_api/rooms.md#list-room-api
 pub mod list_rooms {
     use ruma::api::ruma_api;
