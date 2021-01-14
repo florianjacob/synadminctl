@@ -303,7 +303,8 @@ pub mod list_joined_rooms {
     }
 }
 
-/// https://github.com/matrix-org/synapse/blob/master/docs/admin_api/purge_room.md
+// TODO: This endpoint is deprecated:
+// https://github.com/matrix-org/synapse/blob/master/docs/admin_api/purge_room.md
 pub mod purge_room {
     use ruma::api::ruma_api;
 
